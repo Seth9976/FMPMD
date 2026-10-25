@@ -1,0 +1,184 @@
+//###########################################################################
+// TDecodeESCSequence クラス
+//###########################################################################
+
+１）機能、方針
+
+	エスケープシーケンスのデコードをする
+	画面関係の VCL(TForm 等)とは独立させる
+	デコードしたデータは TDecodeESCList で取得するが、Property で
+	直接参照することも可。
+
+
+２）定義
+	//-------------------------------------------------------------------
+	// 文字の種別を表す列挙型
+	//-------------------------------------------------------------------
+	TLetterCode = (
+		CHAR_ASCII,				// ASCII 文字
+		CHAR_SJIS1,				// SJIS １バイト目
+		CHAR_SJIS2,				// SJIS ２バイト目
+		CHAR_ZEN2				// ２バイト半角文字
+		CHAR_GRAPHIC				// グラフィック文字
+							// ($80～$9f,$e0～$fc)
+	);
+	
+	//-------------------------------------------------------------------
+	// 画面の１座標のアトリビュートを保存するレコード型
+	//-------------------------------------------------------------------
+	PDecodeESCAttribute = ^TDecodeESCAttribute;
+	TDecodeESCAttribute = record
+		Color : TColor;				// 文字色
+		LetterCode : TLetterCode;		// 文字コード種別
+		Attribute_Sub : set of (		// 文字のアトリビュート
+			HighLight,
+			VerticalLine,
+			UnderLine,
+			Blink,
+			Reverse,
+			Secret
+		);
+	end;
+	
+	//-------------------------------------------------------------------
+	// 画面の１座標の状態(文字、アトリビュート)を保存するレコード型
+	//-------------------------------------------------------------------
+	PDecodeESCVRAM = ^TDecodeESCVRAM;
+	TDecodeESCVRAM = record
+		Letter : Word;
+		Attribute : TDecodeESCAttribute;
+	end;
+	
+	//-------------------------------------------------------------------
+	// ESC シーケンスのデコード結果(DecodeESCSequence の戻り値)を
+	// 代入するレコード型
+	//-------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------
+	// DECODEESC_CLEAR	: Rect で表される四角形の内部を空白文字(#$20)で埋める
+	// DECODEESC_SCROOL	: Rect.Top 行から Rect.Bottom の間で Line 行分を削除し、
+	//                    上方向にスクロールする
+	// DECODEESC_INSERT	: Rect.Top 行から Rect.Bottom の間で Line 行分を挿入し、
+	//                    下方向にスクロールする
+	// DECODEESC_WRITE	: Position 位置から Attribute 属性でText を描画する
+	//------------------------------------------------------------------------------------
+	TDecodeESCCommand = record
+		Command : (
+				DECODEESC_CLEAR,	// 消去
+				DECODEESC_SCROOL,	// スクロール(or 行削除)
+				DECODEESC_INSERT,	// 空白行挿入
+				DECODEESC_WRITE		// 文字描画
+			);
+		Rect : TRect;						// DECODEESC_CLEAR 時の消去四角形
+														// DECODEESC_SCROOL/INSERT 時の開始/終了行数(y のみ使用)
+														// DECODEESC_WRITE 時の描画位置
+		ScroolLine : Integer;		// DECODEESC_SCROOL/INSERT 時のスクロール／挿入段数
+		Text : String;					// DECODEESC_WRITE 時の描画文字
+		Attribute : TDecodeESCAttribute;	// DECODEESC_WRITE 時の描画文字アトリビュート
+	end;
+	
+	
+	
+３）Classes
+	//-------------------------------------------------------------------
+	// ESC シーケンスデコードクラス
+	//-------------------------------------------------------------------
+	TDecodeESCSequence = class(TObject)
+		procedure Init;					// 内部バッファ消去＆初期化
+		procedure DecodeESCSequence(				// エスケープシーケンスのデコード
+			const ESCSequence : String;			//   DecodeESCList[i].Attribute.LetterCode は
+			DecodeESCList: TDecodeESCCommandList		//   ２バイト半角かどうかの識別のみ利用可
+		);
+		// 現在の描画色の取得
+		property Color : TColor read FColor;
+		// 現在のカーソル位置の取得
+		property Position : TPoint read FPosition;
+		// 指定位置の VRAM 情報(文字コード、Attribute)の取得
+		property VRAM[x, y : Integer] : TDecodeESCVRAM read GetVRAM;
+		// 指定行の VRAM 情報へのポインタの取得
+		property ScanLine[y : Integer] : PDecodeESCVRAM read GetScanLine;
+	end;
+	
+	
+	//-------------------------------------------------------------------
+	// TDecodeESCCommand 用 TList。要素のメモリ確保、開放は自動的に行う)
+	//-------------------------------------------------------------------
+	TDecodeESCCommandList = class(TList)
+		function Add(Item: TDecodeESCCommand): Integer;			// 要素の追加
+		procedure Insert(Index: Integer; Item: TDecodeESCCommand);	// 要素の挿入
+		procedure Clear;						// 要素のクリア
+		procedure Delete(Index: Integer);				// 要素の削除
+		property Items[Index: Integer]: PDecodeESCCommand read Get write Put; default;
+										// 要素の参照
+	end;
+	
+	
+	※以下のクラスは内部的にのみ使用
+	
+	//-------------------------------------------------------------------
+	// 文字列の中の特定の文字を取得するときに使うクラス(String の代替用)
+	// 範囲外だと例外 EStrPosError を生成する
+	//-------------------------------------------------------------------
+	TStrPos = class(TObject)
+		constructor Create;
+		property Text : String;				// 文字列の設定／取得
+		property Items[Index: Integer]: Char; default;	// 文字の設定／取得
+		property Length : Integer;			// 文字列長の取得
+	end;
+
+	//-------------------------------------------------------------------
+	// 数字(Integer)用 TList。要素のメモリ確保、開放は自動的に行う)
+	//-------------------------------------------------------------------
+	TIntegerList = class(TList)
+		function Add(Item: Integer): Integer;				// 要素の追加
+		procedure Insert(Index: Integer; Item: Integer);		// 要素の挿入
+		procedure Clear;						// 要素のクリア
+		procedure Delete(Index: Integer);				// 要素の削除
+		property Items[Index: Integer]: Integer read Get write Put; default;
+										// 要素の参照
+	end;
+
+
+４）画面状態, Attribute の保存
+		VRAM : Array[0..SCREEN_HEIGHT-1, 0..SCREEN_WIDTH-1] : TDecodeESCVRAM;
+	に保存
+
+
+５）デコードメソッドの動作
+	先頭文字を識別する
+	→文字列の終わりに到達
+		終了
+	→コントロールコード、エスケープシーケンスが見付かった
+		コマンド種
+		１）画面/行/行内消去コマンド
+				DECODEESC_CLEAR コマンドを発行
+		
+		２）カーソル移動系コマンド
+				スクロールするか判別して、スクロールする場合は
+				DECODEESC_SCROOL コマンドを発行
+		
+		３）文字、行の挿入／削除系コマンド
+				DECODEESC_SCROOL/INSERT コマンドを発行
+		
+		４）文字属性変更
+				内部変数を変更
+		
+		ｘ）解読不能
+				デバッグ用に例外生成
+	
+	→コントロールコード、エスケープシーケンス以外
+		文字種
+		１）TAB
+			→半角スペース８文字に変換
+		２）２バイト半角
+			→２バイト半角が途切れるか画面の右端まで走査して、
+			　DECODEESC_WRITE コマンドを発行
+			→出力中に改行が生じる
+				画面スクロールが生じるか判別
+				→スクロールコマンドを発行
+		３）２バイト半角以外
+			→ASCII / SJIS1 / SJIS2 が途切れるか画面の右端まで走査して、
+			　DECODEESC_WRITE コマンドを発行
+			→出力中に改行が生じる
+				画面スクロールが生じるか判別
+				→スクロールコマンドを発行
